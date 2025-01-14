@@ -23,9 +23,17 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 func (cfg *apiConfig) getMetrics(w http.ResponseWriter, r *http.Request) {
 	numHits := cfg.fileserverHits.Load()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Hits: %d\n", numHits)))
+	templateString := `
+	<html>
+		<body>
+			<h1>Welcome, Chirpy Admin</h1>
+			<p>Chirpy has been visited %d times!</p>
+		</body>
+	</html>
+	`
+	w.Write([]byte(fmt.Sprintf(templateString, numHits)))
 }
 
 func (cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) {
@@ -50,8 +58,8 @@ func main() {
 	//create a new serve mux
 	serveMux := http.NewServeMux()
 	serveMux.HandleFunc("GET /api/healthz", healthzHandler)
-	serveMux.HandleFunc("GET /api/metrics", fsHits.getMetrics)
-	serveMux.HandleFunc("POST /api/reset", fsHits.resetHits)
+	serveMux.HandleFunc("GET /admin/metrics", fsHits.getMetrics)
+	serveMux.HandleFunc("POST /admin/reset", fsHits.resetHits)
 	//tell the servemux the app url is being handled by the middleware server
 	serveMux.Handle("/app/", fsHits.middlewareMetricsInc(http.StripPrefix("/app", fileHandler)))
 	server := http.Server{
