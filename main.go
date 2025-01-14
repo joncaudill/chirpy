@@ -49,9 +49,9 @@ func main() {
 	fileHandler := http.FileServer(httpDir)
 	//create a new serve mux
 	serveMux := http.NewServeMux()
-	serveMux.HandleFunc("/healthz", healthzHandler)
-	serveMux.HandleFunc("/metrics", fsHits.getMetrics)
-	serveMux.HandleFunc("/reset", fsHits.resetHits)
+	serveMux.HandleFunc("GET /api/healthz", healthzHandler)
+	serveMux.HandleFunc("GET /api/metrics", fsHits.getMetrics)
+	serveMux.HandleFunc("POST /api/reset", fsHits.resetHits)
 	//tell the servemux the app url is being handled by the middleware server
 	serveMux.Handle("/app/", fsHits.middlewareMetricsInc(http.StripPrefix("/app", fileHandler)))
 	server := http.Server{
