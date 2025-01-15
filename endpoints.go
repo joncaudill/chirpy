@@ -65,12 +65,23 @@ func (cfg *apiConfig) chirpsPostHandler(w http.ResponseWriter, r *http.Request) 
 	newid := uuid.New()
 	timeNow := time.Now()
 
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting token: %v", err), http.StatusUnauthorized)
+		return
+	}
+	validatedUserID, err := auth.ValidateJWT(token, cfg.jwt_secret)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error validating token: %v", err), http.StatusUnauthorized)
+		return
+	}
+
 	respBody, _ := cfg.db.CreateChirp(context.Background(), database.CreateChirpParams{
 		ID:        newid,
 		CreatedAt: timeNow,
 		UpdatedAt: timeNow,
 		Body:      cleaned,
-		UserID:    parameter.UserId,
+		UserID:    validatedUserID,
 	})
 	respChirp := chirp{}
 	respChirp.Id = respBody.ID
@@ -128,6 +139,9 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		errHandler(w, fmt.Errorf("error parsing login info: %v", err))
 		return
 	}
+	if partUser.ExpiresInSeconds == 0 {
+		partUser.ExpiresInSeconds = 3600
+	}
 	ctx := context.Background()
 	user, err := cfg.db.GetUserByEmail(ctx, partUser.Email)
 	if err != nil {
@@ -143,12 +157,18 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		errHandler(w, fmt.Errorf("incorrect email or password"), http.StatusUnauthorized)
 		return
 	}
+	token, err := auth.MakeJWT(user.ID, cfg.jwt_secret, time.Second*time.Duration(partUser.ExpiresInSeconds))
+	if err != nil {
+		errHandler(w, fmt.Errorf("error creating token: %v", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	parameter.ID = user.ID
 	parameter.CreatedAt = user.CreatedAt
 	parameter.UpdatedAt = user.UpdatedAt
 	parameter.Email = user.Email
+	parameter.TokenJWT = token
 	resp, _ := json.Marshal(parameter)
 	w.Write(resp)
 

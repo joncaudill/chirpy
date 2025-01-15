@@ -19,6 +19,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwt_secret     string
 }
 
 type User struct {
@@ -26,11 +27,13 @@ type User struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	TokenJWT  string    `json:"token"`
 }
 
 type AuthUser struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email            string `json:"email"`
+	Password         string `json:"password"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
 }
 
 type chirp struct {
@@ -85,13 +88,14 @@ func errHandler(w http.ResponseWriter, err error, statusParm ...int) {
 func main() {
 	godotenv.Load()
 	pform := os.Getenv("PLATFORM")
+	jwtSecret := os.Getenv("JWT_SECRET")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		panic(err)
 	}
 	dbQueries := database.New(db)
-	config := apiConfig{db: dbQueries, platform: pform}
+	config := apiConfig{db: dbQueries, platform: pform, jwt_secret: jwtSecret}
 	//set location for files being served
 	httpDir := http.Dir(".")
 	//create a file server
