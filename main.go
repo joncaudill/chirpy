@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/joncaudill/chirpy/internal/auth"
 	"github.com/joncaudill/chirpy/internal/database"
 	_ "github.com/lib/pq"
 )
@@ -28,6 +29,11 @@ type User struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type AuthUser struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type chirp struct {
@@ -95,31 +101,17 @@ func (cfg *apiConfig) chirpsPostHandler(w http.ResponseWriter, r *http.Request) 
 	parameter := chirp{}
 	err := decoder.Decode(&parameter)
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error parsing chirp info: %v", err), http.StatusBadRequest)
 		return
 	}
 	if len(parameter.Body) > 140 {
-		respBody := chirpError{Error: "Chirp is too long"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("chirp is too long"), http.StatusBadRequest)
 		return
 	}
 	cleaned := profanityFilter(parameter.Body)
 	newid := uuid.New()
 	timeNow := time.Now()
-	// respBody := chirp{
-	// 	Id:        newid,
-	// 	CreatedAt: timeNow,
-	// 	UpdatedAt: timeNow,
-	// 	Body:      cleaned,
-	// 	UserId:    parameter.UserId,
-	// }
+
 	respBody, _ := cfg.db.CreateChirp(context.Background(), database.CreateChirpParams{
 		ID:        newid,
 		CreatedAt: timeNow,
@@ -143,11 +135,7 @@ func (cfg *apiConfig) chirpsPostHandler(w http.ResponseWriter, r *http.Request) 
 func (cfg *apiConfig) chirpsGetHandler(w http.ResponseWriter, r *http.Request) {
 	chirps, err := cfg.db.GetAllChirps(context.Background())
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error getting chirps: %v", err))
 		return
 	}
 
@@ -162,7 +150,11 @@ func (cfg *apiConfig) chirpsGetHandler(w http.ResponseWriter, r *http.Request) {
 		jsonChirp, _ := json.Marshal(parsedChirp)
 		chirpsResp = append(chirpsResp, string(jsonChirp))
 	}
-	jsonResp, _ := json.Marshal(chirpsResp)
+	jsonResp, err := json.Marshal(chirpsResp)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error parsing chirps: %v", err))
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -176,17 +168,11 @@ func (cfg *apiConfig) chirpsGetOneHandler(w http.ResponseWriter, r *http.Request
 	fmt.Printf("chirpid: %s", chirpID)
 	chirpData, err := cfg.db.GetChirpById(context.Background(), chirpUUID)
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error getting chirp: %v", err))
 		return
 	}
 	if chirpData.ID == uuid.Nil {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("chirp not found"))
+		errHandler(w, fmt.Errorf("chirp not found"), http.StatusNotFound)
 		return
 	}
 	respChirp := chirp{}
@@ -198,11 +184,7 @@ func (cfg *apiConfig) chirpsGetOneHandler(w http.ResponseWriter, r *http.Request
 
 	jsonResp, err := json.Marshal(respChirp)
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error parsing chirp: %v", err))
 		return
 	}
 
@@ -227,24 +209,26 @@ func profanityFilter(body string) string {
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
+	partUser := AuthUser{}
 	parameter := User{}
-	err := decoder.Decode(&parameter)
+	err := decoder.Decode(&partUser)
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error parsing user info: %v", err))
+		return
+	}
+	hashedPassword, err := auth.HashPassword(partUser.Password)
+	if err != nil {
+		errHandler(w, fmt.Errorf("unable to hash password: %v", err))
 		return
 	}
 	ctx := context.Background()
-	newUser, err := cfg.db.CreateUser(ctx, parameter.Email)
+	newUser, err := cfg.db.CreateUser(ctx,
+		database.CreateUserParams{
+			Email:          partUser.Email,
+			HashedPassword: hashedPassword,
+		})
 	if err != nil {
-		respBody := chirpError{Error: "Something went wrong"}
-		resp, _ := json.Marshal(respBody)
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(resp)
+		errHandler(w, fmt.Errorf("error creating user: %v", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -254,6 +238,53 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	parameter.UpdatedAt = newUser.UpdatedAt
 	parameter.Email = newUser.Email
 	resp, _ := json.Marshal(parameter)
+	w.Write(resp)
+}
+
+func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	partUser := AuthUser{}
+	parameter := User{}
+	err := decoder.Decode(&partUser)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error parsing login info: %v", err))
+		return
+	}
+	ctx := context.Background()
+	user, err := cfg.db.GetUserByEmail(ctx, partUser.Email)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting user: %v", err))
+		return
+	}
+	if user.ID == uuid.Nil {
+		errHandler(w, fmt.Errorf("user not found"), http.StatusNotFound)
+		return
+	}
+	validated := auth.CheckPasswordHash(partUser.Password, user.HashedPassword)
+	if !validated {
+		errHandler(w, fmt.Errorf("incorrect email or password"), http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	parameter.ID = user.ID
+	parameter.CreatedAt = user.CreatedAt
+	parameter.UpdatedAt = user.UpdatedAt
+	parameter.Email = user.Email
+	resp, _ := json.Marshal(parameter)
+	w.Write(resp)
+
+}
+
+func errHandler(w http.ResponseWriter, err error, statusParm ...int) {
+	status := http.StatusInternalServerError
+	if len(statusParm) > 0 {
+		status = statusParm[0]
+	}
+	respBody := chirpError{Error: err.Error()}
+	resp, _ := json.Marshal(respBody)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
 	w.Write(resp)
 }
 
@@ -278,6 +309,7 @@ func main() {
 	serveMux.HandleFunc("POST /admin/reset", config.reset)
 	serveMux.HandleFunc("POST /api/chirps", config.chirpsPostHandler)
 	serveMux.HandleFunc("POST /api/users", config.createUser)
+	serveMux.HandleFunc("POST /api/login", config.loginUser)
 	serveMux.HandleFunc("GET /api/chirps/", config.chirpsGetHandler)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", config.chirpsGetOneHandler)
 	//tell the servemux the app url is being handled by the middleware server
