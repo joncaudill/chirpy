@@ -80,3 +80,17 @@ func MakeRefreshToken() (string, error) {
 	}
 	return hex.EncodeToString(token), nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	key := headers.Get("Authorization")
+	if key == "" {
+		return "", fmt.Errorf("no polka key")
+	}
+	apiKey := key
+	if len(apiKey) < 7 || apiKey[:7] != "ApiKey " {
+		return "", fmt.Errorf("invalid API key")
+	}
+	trimmedKey := strings.Trim(apiKey[7:], " ")
+
+	return trimmedKey, nil
+}

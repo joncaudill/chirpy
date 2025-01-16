@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -128,6 +129,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	parameter.CreatedAt = newUser.CreatedAt
 	parameter.UpdatedAt = newUser.UpdatedAt
 	parameter.Email = newUser.Email
+	parameter.IsChirpyRed = newUser.IsChirpyRed
 	resp, _ := json.Marshal(parameter)
 	w.Write(resp)
 }
@@ -185,6 +187,7 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 	parameter.CreatedAt = user.CreatedAt
 	parameter.UpdatedAt = user.UpdatedAt
 	parameter.Email = user.Email
+	parameter.IsChirpyRed = user.IsChirpyRed
 	parameter.TokenJWT = token
 	parameter.RefreshToken = refToken
 	resp, _ := json.Marshal(parameter)
@@ -193,13 +196,33 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) chirpsGetHandler(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.db.GetAllChirps(context.Background())
-	if err != nil {
-		errHandler(w, fmt.Errorf("error getting chirps: %v", err))
+	//get the author_id query parameter
+	//if it doesn't exist, get all chirps
+	//if it does, get chirps by author with user_id
+	qauthor := r.URL.Query().Get("author_id")
+	qsort := r.URL.Query().Get("sort")
+	var chirps []database.Chirp
+	var err1 error
+	if qauthor == "" {
+		chirps, err1 = cfg.db.GetAllChirps(context.Background())
+	} else {
+		authorID, err := uuid.Parse(qauthor)
+		if err != nil {
+			errHandler(w, fmt.Errorf("error parsing author ID: %v", err))
+			return
+		}
+		chirps, err1 = cfg.db.GetChirpsByUserId(context.Background(), authorID)
+	}
+	if err1 != nil {
+		errHandler(w, fmt.Errorf("error getting chirps: %v", err1))
 		return
 	}
-
-	chirpsResp := []string{}
+	if qsort == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+	chirpsResp := []chirp{}
 	for _, chrp := range chirps {
 		parsedChirp := chirp{}
 		parsedChirp.Id = chrp.ID
@@ -207,9 +230,10 @@ func (cfg *apiConfig) chirpsGetHandler(w http.ResponseWriter, r *http.Request) {
 		parsedChirp.UpdatedAt = chrp.UpdatedAt
 		parsedChirp.Body = chrp.Body
 		parsedChirp.UserId = chrp.UserID
-		jsonChirp, _ := json.Marshal(parsedChirp)
-		chirpsResp = append(chirpsResp, string(jsonChirp))
+		//jsonChirp, _ := json.Marshal(parsedChirp)
+		chirpsResp = append(chirpsResp, parsedChirp)
 	}
+
 	jsonResp, err := json.Marshal(chirpsResp)
 	if err != nil {
 		errHandler(w, fmt.Errorf("error parsing chirps: %v", err))
@@ -392,8 +416,36 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 	returningUser.CreatedAt = updatedUser.CreatedAt
 	returningUser.UpdatedAt = updatedUser.UpdatedAt
 	returningUser.Email = updatedUser.Email
+	returningUser.IsChirpyRed = updatedUser.IsChirpyRed
 	resp, _ := json.Marshal(returningUser)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
+}
+
+func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, r *http.Request) {
+	apiKey, _ := auth.GetAPIKey(r.Header)
+	if cfg.polka_key != apiKey {
+		errHandler(w, fmt.Errorf("invalid polka key"), http.StatusUnauthorized)
+		return
+	}
+	decoder := json.NewDecoder(r.Body)
+	parameter := PolkaHook{}
+	err := decoder.Decode(&parameter)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error parsing webhook info: %v", err), http.StatusBadRequest)
+		return
+	}
+	if parameter.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ctx := context.Background()
+	err = cfg.db.UpdateUserToRed(ctx, parameter.Data.UserID)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting user: %v", err), http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -20,6 +20,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	jwt_secret     string
+	polka_key      string
 }
 
 type User struct {
@@ -27,6 +28,7 @@ type User struct {
 	Email        string    `json:"email"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 	TokenJWT     string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
 }
@@ -34,6 +36,13 @@ type User struct {
 type AuthUser struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type PolkaHook struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID uuid.UUID `json:"user_id"`
+	} `json:"data"`
 }
 
 type chirp struct {
@@ -90,12 +99,13 @@ func main() {
 	pform := os.Getenv("PLATFORM")
 	jwtSecret := os.Getenv("JWT_SECRET")
 	dbURL := os.Getenv("DB_URL")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		panic(err)
 	}
 	dbQueries := database.New(db)
-	config := apiConfig{db: dbQueries, platform: pform, jwt_secret: jwtSecret}
+	config := apiConfig{db: dbQueries, platform: pform, jwt_secret: jwtSecret, polka_key: polkaKey}
 	//set location for files being served
 	httpDir := http.Dir(".")
 	//create a file server
@@ -114,6 +124,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", config.loginUser)
 	serveMux.HandleFunc("POST /api/refresh", config.updateJWTToken)
 	serveMux.HandleFunc("POST /api/revoke", config.revokeRefreshToken)
+	serveMux.HandleFunc("POST /api/polka/webhooks", config.handlePolkaWebhook)
 	//tell the servemux the app url is being handled by the middleware server
 	serveMux.Handle("/app/", config.middlewareMetricsInc(http.StripPrefix("/app", fileHandler)))
 	server := http.Server{
