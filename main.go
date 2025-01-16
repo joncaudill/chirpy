@@ -23,17 +23,17 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	TokenJWT  string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	Email        string    `json:"email"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	TokenJWT     string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type AuthUser struct {
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	ExpiresInSeconds int    `json:"expires_in_seconds"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type chirp struct {
@@ -110,6 +110,8 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", config.loginUser)
 	serveMux.HandleFunc("GET /api/chirps/", config.chirpsGetHandler)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", config.chirpsGetOneHandler)
+	serveMux.HandleFunc("POST /api/refresh", config.updateJWTToken)
+	serveMux.HandleFunc("POST /api/revoke", config.revokeRefreshToken)
 	//tell the servemux the app url is being handled by the middleware server
 	serveMux.Handle("/app/", config.middlewareMetricsInc(http.StripPrefix("/app", fileHandler)))
 	server := http.Server{

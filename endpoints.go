@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,9 +141,7 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		errHandler(w, fmt.Errorf("error parsing login info: %v", err))
 		return
 	}
-	if partUser.ExpiresInSeconds == 0 {
-		partUser.ExpiresInSeconds = 3600
-	}
+
 	ctx := context.Background()
 	user, err := cfg.db.GetUserByEmail(ctx, partUser.Email)
 	if err != nil {
@@ -157,9 +157,26 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		errHandler(w, fmt.Errorf("incorrect email or password"), http.StatusUnauthorized)
 		return
 	}
-	token, err := auth.MakeJWT(user.ID, cfg.jwt_secret, time.Second*time.Duration(partUser.ExpiresInSeconds))
+	token, err := auth.MakeJWT(user.ID, cfg.jwt_secret, time.Hour)
 	if err != nil {
 		errHandler(w, fmt.Errorf("error creating token: %v", err))
+		return
+	}
+
+	refToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		errHandler(w, fmt.Errorf("error creating refresh token: %v", err))
+		return
+	}
+	_, err = cfg.db.CreateRefreshToken(ctx, database.CreateRefreshTokenParams{
+		UserID:    user.ID,
+		Token:     refToken,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour * 24 * 60),
+		RevokedAt: sql.NullTime{},
+	})
+	if err != nil {
+		errHandler(w, fmt.Errorf("error creating refresh token: %v", err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -169,6 +186,7 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 	parameter.UpdatedAt = user.UpdatedAt
 	parameter.Email = user.Email
 	parameter.TokenJWT = token
+	parameter.RefreshToken = refToken
 	resp, _ := json.Marshal(parameter)
 	w.Write(resp)
 
@@ -233,4 +251,66 @@ func (cfg *apiConfig) chirpsGetOneHandler(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonResp)
+}
+
+func (cfg *apiConfig) updateJWTToken(w http.ResponseWriter, r *http.Request) {
+	//updates the JWT token
+	//must have a valid refresh token in header
+	bearerToken := r.Header.Get("Authorization")
+	if len(bearerToken) < 7 || bearerToken[:7] != "Bearer " {
+		errHandler(w, fmt.Errorf("invalid authorization header"), http.StatusUnauthorized)
+		return
+	}
+	trimmedToken := strings.Trim(bearerToken[7:], " ")
+	ctx := context.Background()
+	refToken, err := cfg.db.GetRefreshToken(ctx, trimmedToken)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting refresh token: %v", err), http.StatusUnauthorized)
+		return
+	}
+	if refToken == "" {
+		errHandler(w, fmt.Errorf("no refresh token found"), http.StatusUnauthorized)
+		return
+	}
+
+	ctx = context.Background()
+	userID, err := cfg.db.GetUserFromRefreshToken(ctx, trimmedToken)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting user id: %v", err))
+		return
+	}
+	if userID == uuid.Nil {
+		errHandler(w, fmt.Errorf("user not found"), http.StatusNotFound)
+		return
+	}
+	token, err := auth.MakeJWT(userID, cfg.jwt_secret, time.Hour)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error creating token: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	parameter := User{}
+	parameter.TokenJWT = token
+	resp, _ := json.Marshal(parameter)
+	w.Write(resp)
+}
+
+func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+	//revokes a refresh token
+	//must have a valid refresh token in header
+	bearerToken := r.Header.Get("Authorization")
+	if len(bearerToken) < 7 || bearerToken[:7] != "Bearer " {
+		errHandler(w, fmt.Errorf("invalid authorization header"), http.StatusUnauthorized)
+		return
+	}
+	trimmedToken := strings.Trim(bearerToken[7:], " ")
+	ctx := context.Background()
+	err := cfg.db.RevokeRefreshToken(ctx, trimmedToken)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error revoking token: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNoContent)
 }
