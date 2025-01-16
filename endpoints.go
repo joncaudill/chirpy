@@ -225,10 +225,9 @@ func (cfg *apiConfig) chirpsGetHandler(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) chirpsGetOneHandler(w http.ResponseWriter, r *http.Request) {
 	chirpID := r.PathValue("chirpID")
 	chirpUUID, _ := uuid.Parse(chirpID)
-	fmt.Printf("chirpid: %s", chirpID)
 	chirpData, err := cfg.db.GetChirpById(context.Background(), chirpUUID)
 	if err != nil {
-		errHandler(w, fmt.Errorf("error getting chirp: %v", err))
+		errHandler(w, fmt.Errorf("error getting chirp: %v", err), http.StatusNotFound)
 		return
 	}
 	if chirpData.ID == uuid.Nil {
@@ -251,6 +250,42 @@ func (cfg *apiConfig) chirpsGetOneHandler(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonResp)
+}
+
+func (cfg *apiConfig) chirpsDeleteOneHandler(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	chirpUUID, _ := uuid.Parse(chirpID)
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting token: %v", err), http.StatusUnauthorized)
+		return
+	}
+	validatedUserID, err := auth.ValidateJWT(token, cfg.jwt_secret)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error validating token: %v", err), http.StatusUnauthorized)
+		return
+	}
+	ctx := context.Background()
+	chirpData, err := cfg.db.GetChirpById(ctx, chirpUUID)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error getting chirp: %v", err))
+		return
+	}
+	if chirpData.ID == uuid.Nil {
+		errHandler(w, fmt.Errorf("chirp not found"), http.StatusNotFound)
+		return
+	}
+	if chirpData.UserID != validatedUserID {
+		errHandler(w, fmt.Errorf("unauthorized to delete chirp"), http.StatusForbidden)
+		return
+	}
+	err = cfg.db.DeleteChirp(ctx, chirpUUID)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error deleting chirp: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (cfg *apiConfig) updateJWTToken(w http.ResponseWriter, r *http.Request) {
@@ -313,4 +348,52 @@ func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	//updates a user's email
+	//must have a valid JWT token in header
+	//must have new email and password in request
+	bearerToken := r.Header.Get("Authorization")
+	if len(bearerToken) < 7 || bearerToken[:7] != "Bearer " {
+		errHandler(w, fmt.Errorf("invalid authorization header"), http.StatusUnauthorized)
+		return
+	}
+	trimmedToken := strings.Trim(bearerToken[7:], " ")
+	userID, err := auth.ValidateJWT(trimmedToken, cfg.jwt_secret)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error validating token: %v", err), http.StatusUnauthorized)
+		return
+	}
+	decoder := json.NewDecoder(r.Body)
+	partUser := AuthUser{}
+	err = decoder.Decode(&partUser)
+	if err != nil {
+		errHandler(w, fmt.Errorf("error parsing user info: %v", err))
+		return
+	}
+	hashedPassword, err := auth.HashPassword(partUser.Password)
+	if err != nil {
+		errHandler(w, fmt.Errorf("unable to hash password: %v", err))
+		return
+	}
+	ctx := context.Background()
+	updatedUser, err := cfg.db.UpdateUser(ctx, database.UpdateUserParams{
+		ID:             userID,
+		Email:          partUser.Email,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		errHandler(w, fmt.Errorf("error updating user: %v", err))
+		return
+	}
+	returningUser := User{}
+	returningUser.ID = updatedUser.ID
+	returningUser.CreatedAt = updatedUser.CreatedAt
+	returningUser.UpdatedAt = updatedUser.UpdatedAt
+	returningUser.Email = updatedUser.Email
+	resp, _ := json.Marshal(returningUser)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
 }
